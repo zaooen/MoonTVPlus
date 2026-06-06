@@ -1,10 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any,no-console */
 import bs58 from 'bs58';
 import he from 'he';
-import Hls from 'hls.js';
 
-function getDoubanImageProxyConfig(): {
-  proxyType:
+export type DoubanImageProxyType =
   | 'direct'
   | 'server'
   | 'img3'
@@ -12,59 +10,34 @@ function getDoubanImageProxyConfig(): {
   | 'cmliussss-cdn-ali'
   | 'baidu'
   | 'custom';
+
+function normalizeDoubanImageProxyConfig(
+  proxyType: DoubanImageProxyType,
+  proxyUrl: string
+): {
+  proxyType: DoubanImageProxyType;
   proxyUrl: string;
 } {
-  // 确保在浏览器环境中执行
-  if (typeof window === 'undefined') {
+  const normalizedProxyUrl = proxyUrl.trim();
+
+  if (proxyType === 'custom' && !normalizedProxyUrl) {
     return {
-      proxyType: 'cmliussss-cdn-tencent',
+      proxyType: 'server',
       proxyUrl: '',
     };
   }
 
-  const doubanImageProxyType =
-    localStorage.getItem('doubanImageProxyType') ||
-    (window as any).RUNTIME_CONFIG?.DOUBAN_IMAGE_PROXY_TYPE ||
-    'cmliussss-cdn-tencent';
-  const doubanImageProxy =
-    localStorage.getItem('doubanImageProxyUrl') ||
-    (window as any).RUNTIME_CONFIG?.DOUBAN_IMAGE_PROXY ||
-    '';
   return {
-    proxyType: doubanImageProxyType,
-    proxyUrl: doubanImageProxy,
+    proxyType,
+    proxyUrl: normalizedProxyUrl,
   };
 }
 
-/**
- * 处理图片 URL，根据用户设置使用相应的代理
- */
-export function processImageUrl(originalUrl: string): string {
-  if (!originalUrl) return originalUrl;
-
-  // 如果已经是代理URL，直接返回
-  if (originalUrl.startsWith('/api/image-proxy')) {
-    return originalUrl;
-  }
-
-  // 处理 TMDB 图片 URL 替换
-  if (originalUrl.includes('image.tmdb.org')) {
-    if (typeof window !== 'undefined') {
-      const tmdbImageBaseUrl = localStorage.getItem('tmdbImageBaseUrl') || 'https://image.tmdb.org';
-      // 只有当用户设置了不同的 baseUrl 时才进行替换
-      if (tmdbImageBaseUrl !== 'https://image.tmdb.org') {
-        return originalUrl.replace('https://image.tmdb.org', tmdbImageBaseUrl);
-      }
-    }
-    return originalUrl;
-  }
-
-  // 处理豆瓣图片代理
-  if (!originalUrl.includes('doubanio.com')) {
-    return originalUrl;
-  }
-
-  const { proxyType, proxyUrl } = getDoubanImageProxyConfig();
+function buildDoubanImageUrl(
+  originalUrl: string,
+  proxyType: DoubanImageProxyType,
+  proxyUrl: string
+): string {
   switch (proxyType) {
     case 'server':
       return `/api/image-proxy?url=${encodeURIComponent(originalUrl)}`;
@@ -81,13 +54,382 @@ export function processImageUrl(originalUrl: string): string {
         'img.doubanio.cmliussss.com'
       );
     case 'baidu':
-      return `https://image.baidu.com/search/down?url=${encodeURIComponent(originalUrl)}`;
+      return `https://image.baidu.com/search/down?url=${encodeURIComponent(
+        originalUrl
+      )}`;
     case 'custom':
-      return `${proxyUrl}${encodeURIComponent(originalUrl)}`;
+      return proxyUrl
+        ? `${proxyUrl}${encodeURIComponent(originalUrl)}`
+        : originalUrl;
     case 'direct':
     default:
       return originalUrl;
   }
+}
+
+function getDoubanImageProxyConfig(): {
+  proxyType: DoubanImageProxyType;
+  proxyUrl: string;
+  backupProxyType: DoubanImageProxyType;
+  backupProxyUrl: string;
+} {
+  // 确保在浏览器环境中执行
+  if (typeof window === 'undefined') {
+    return {
+      proxyType: 'cmliussss-cdn-tencent',
+      proxyUrl: '',
+      backupProxyType: 'server',
+      backupProxyUrl: '',
+    };
+  }
+
+  const doubanImageProxyType =
+    localStorage.getItem('doubanImageProxyType') ||
+    (window as any).RUNTIME_CONFIG?.DOUBAN_IMAGE_PROXY_TYPE ||
+    'cmliussss-cdn-tencent';
+  const doubanImageProxy =
+    localStorage.getItem('doubanImageProxyUrl') ||
+    (window as any).RUNTIME_CONFIG?.DOUBAN_IMAGE_PROXY ||
+    '';
+  const doubanImageProxyBackupType =
+    (localStorage.getItem(
+      'doubanImageProxyTypeBackup'
+    ) as DoubanImageProxyType | null) || 'server';
+  const doubanImageProxyBackupUrl =
+    localStorage.getItem('doubanImageProxyUrlBackup') || '';
+  const primaryConfig = normalizeDoubanImageProxyConfig(
+    doubanImageProxyType,
+    doubanImageProxy
+  );
+  const backupConfig = normalizeDoubanImageProxyConfig(
+    doubanImageProxyBackupType,
+    doubanImageProxyBackupUrl
+  );
+  return {
+    proxyType: primaryConfig.proxyType,
+    proxyUrl: primaryConfig.proxyUrl,
+    backupProxyType: backupConfig.proxyType,
+    backupProxyUrl: backupConfig.proxyUrl,
+  };
+}
+
+export function getDoubanImageFallbackUrl(originalUrl: string): string | null {
+  if (!originalUrl || !originalUrl.includes('doubanio.com')) {
+    return null;
+  }
+
+  const { proxyType, proxyUrl, backupProxyType, backupProxyUrl } =
+    getDoubanImageProxyConfig();
+  const primaryUrl = buildDoubanImageUrl(originalUrl, proxyType, proxyUrl);
+  const backupUrl = buildDoubanImageUrl(
+    originalUrl,
+    backupProxyType,
+    backupProxyUrl
+  );
+
+  if (backupUrl === primaryUrl) {
+    return null;
+  }
+
+  return backupUrl;
+}
+
+function isBangumiImageUrl(url: string): boolean {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    return (
+      hostname === 'lain.bgm.tv' ||
+      hostname === 'r.bgm.tv' ||
+      hostname.endsWith('.bgm.tv') ||
+      hostname.endsWith('.bangumi.tv')
+    );
+  } catch {
+    return false;
+  }
+}
+
+type AnimeImageSource = 'direct' | 'server-proxy' | 'custom-baseurl';
+
+const BANGUMI_IMAGE_FALLBACK_UNTIL_KEY = 'bangumiImageFallbackUntil';
+const BANGUMI_IMAGE_FALLBACK_SIGNATURE_KEY = 'bangumiImageFallbackSignature';
+const BANGUMI_IMAGE_FALLBACK_DURATION = 60 * 60 * 1000;
+
+function normalizeBaseUrl(baseUrl: string): string {
+  return baseUrl.trim().replace(/\/+$/, '');
+}
+
+function normalizeAnimeImageSource(
+  value: string | null | undefined
+): AnimeImageSource {
+  return value === 'server-proxy' ||
+    value === 'custom-baseurl' ||
+    value === 'direct'
+    ? value
+    : 'direct';
+}
+
+function getPrimaryBangumiImageSource(): AnimeImageSource {
+  if (typeof window === 'undefined') {
+    return 'direct';
+  }
+
+  return normalizeAnimeImageSource(
+    localStorage.getItem('animeDataSource') ||
+      (window as any).RUNTIME_CONFIG?.BANGUMI_DATA_SOURCE ||
+      'direct'
+  );
+}
+
+function getBackupBangumiImageSource(
+  primary: AnimeImageSource
+): AnimeImageSource | null {
+  if (typeof window === 'undefined') {
+    return primary === 'server-proxy' ? null : 'server-proxy';
+  }
+
+  const backup = normalizeAnimeImageSource(
+    localStorage.getItem('animeDataSourceBackup') || 'server-proxy'
+  );
+
+  return backup === primary ? null : backup;
+}
+
+function getBangumiImageBaseUrl(): string {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+
+  return normalizeBaseUrl(localStorage.getItem('animeImageBaseUrl') || '');
+}
+
+function getBangumiImageFallbackSignature(): string {
+  if (typeof window === 'undefined') return '';
+
+  return JSON.stringify({
+    primary: getPrimaryBangumiImageSource(),
+    backup: normalizeAnimeImageSource(
+      localStorage.getItem('animeDataSourceBackup') || 'server-proxy'
+    ),
+    imageBaseUrl: getBangumiImageBaseUrl(),
+  });
+}
+
+export function clearBangumiImageFallbackCache(): void {
+  if (typeof window === 'undefined') return;
+  localStorage.removeItem(BANGUMI_IMAGE_FALLBACK_UNTIL_KEY);
+  localStorage.removeItem(BANGUMI_IMAGE_FALLBACK_SIGNATURE_KEY);
+}
+
+export function markBangumiImageFallbackActive(): void {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(
+    BANGUMI_IMAGE_FALLBACK_UNTIL_KEY,
+    String(Date.now() + BANGUMI_IMAGE_FALLBACK_DURATION)
+  );
+  localStorage.setItem(
+    BANGUMI_IMAGE_FALLBACK_SIGNATURE_KEY,
+    getBangumiImageFallbackSignature()
+  );
+}
+
+function normalizeComparableUrl(url: string): string {
+  if (typeof window === 'undefined') return url;
+
+  try {
+    return new URL(url, window.location.href).href;
+  } catch {
+    return url;
+  }
+}
+
+export function clearBangumiImageFallbackCacheIfFailed(
+  target: HTMLImageElement,
+  originalUrl: string
+): boolean {
+  if (!originalUrl || !isBangumiImageUrl(originalUrl)) {
+    return false;
+  }
+
+  const fallbackUrl = getBangumiImageFallbackUrl(originalUrl);
+  if (!fallbackUrl) {
+    return false;
+  }
+
+  const normalizedFallbackUrl = normalizeComparableUrl(fallbackUrl);
+  const failedUrls = [target.currentSrc, target.src]
+    .filter(Boolean)
+    .map(normalizeComparableUrl);
+  const isFallbackFailure =
+    target.dataset.bangumiBackupTried === 'true' ||
+    failedUrls.includes(normalizedFallbackUrl);
+
+  if (!isFallbackFailure) {
+    return false;
+  }
+
+  target.dataset.bangumiBackupFailed = 'true';
+  delete target.dataset.bangumiBackupTried;
+  clearBangumiImageFallbackCache();
+  return true;
+}
+
+function isBangumiImageFallbackActive(): boolean {
+  if (typeof window === 'undefined') return false;
+
+  const until = Number(localStorage.getItem(BANGUMI_IMAGE_FALLBACK_UNTIL_KEY));
+  if (!until || Date.now() >= until) {
+    clearBangumiImageFallbackCache();
+    return false;
+  }
+
+  const signature = localStorage.getItem(BANGUMI_IMAGE_FALLBACK_SIGNATURE_KEY);
+  if (signature !== getBangumiImageFallbackSignature()) {
+    clearBangumiImageFallbackCache();
+    return false;
+  }
+
+  return true;
+}
+
+function buildBangumiImageUrl(
+  originalUrl: string,
+  source: AnimeImageSource
+): string {
+  switch (source) {
+    case 'server-proxy':
+      return `/api/image-proxy?url=${encodeURIComponent(
+        originalUrl
+      )}&source=bangumi`;
+    case 'custom-baseurl': {
+      const imageBaseUrl = getBangumiImageBaseUrl();
+      return imageBaseUrl ? `${imageBaseUrl}/${originalUrl}` : originalUrl;
+    }
+    case 'direct':
+    default:
+      return originalUrl;
+  }
+}
+
+export function getBangumiImageFallbackUrl(originalUrl: string): string | null {
+  if (!originalUrl || !isBangumiImageUrl(originalUrl)) {
+    return null;
+  }
+
+  const primary = getPrimaryBangumiImageSource();
+  const backup = getBackupBangumiImageSource(primary);
+  if (!backup) {
+    return null;
+  }
+
+  const primaryUrl = buildBangumiImageUrl(originalUrl, primary);
+  const backupUrl = buildBangumiImageUrl(originalUrl, backup);
+
+  if (backupUrl === primaryUrl) {
+    return null;
+  }
+
+  return backupUrl;
+}
+
+export function tryApplyDoubanImageFallback(
+  target: HTMLImageElement,
+  originalUrl: string
+): boolean {
+  if (!originalUrl || !originalUrl.includes('doubanio.com')) {
+    return false;
+  }
+
+  if (target.dataset.doubanBackupTried === 'true') {
+    return false;
+  }
+
+  const fallbackUrl = getDoubanImageFallbackUrl(originalUrl);
+  if (
+    !fallbackUrl ||
+    fallbackUrl === target.currentSrc ||
+    fallbackUrl === target.src
+  ) {
+    return false;
+  }
+
+  target.dataset.doubanBackupTried = 'true';
+  target.src = fallbackUrl;
+  return true;
+}
+
+export function tryApplyBangumiImageFallback(
+  target: HTMLImageElement,
+  originalUrl: string
+): boolean {
+  if (!originalUrl || !isBangumiImageUrl(originalUrl)) {
+    return false;
+  }
+
+  if (target.dataset.bangumiBackupTried === 'true') {
+    return false;
+  }
+
+  if (target.dataset.bangumiBackupFailed === 'true') {
+    return false;
+  }
+
+  const fallbackUrl = getBangumiImageFallbackUrl(originalUrl);
+  if (
+    !fallbackUrl ||
+    fallbackUrl === target.currentSrc ||
+    fallbackUrl === target.src
+  ) {
+    return false;
+  }
+
+  target.dataset.bangumiBackupTried = 'true';
+  markBangumiImageFallbackActive();
+  target.src = fallbackUrl;
+  return true;
+}
+
+/**
+ * 处理图片 URL，根据用户设置使用相应的代理
+ */
+export function processImageUrl(originalUrl: string): string {
+  if (!originalUrl) return originalUrl;
+
+  // 如果已经是代理URL，直接返回
+  if (originalUrl.startsWith('/api/image-proxy')) {
+    return originalUrl;
+  }
+
+  // 处理 TMDB 图片 URL 替换
+  if (originalUrl.includes('image.tmdb.org')) {
+    if (typeof window !== 'undefined') {
+      const tmdbImageBaseUrl =
+        localStorage.getItem('tmdbImageBaseUrl') || 'https://image.tmdb.org';
+      // 只有当用户设置了不同的 baseUrl 时才进行替换
+      if (tmdbImageBaseUrl !== 'https://image.tmdb.org') {
+        return originalUrl.replace('https://image.tmdb.org', tmdbImageBaseUrl);
+      }
+    }
+    return originalUrl;
+  }
+
+  // 处理 Bangumi 图片代理。直连模式尊重用户选择，不代理图片；
+  // 仅在服务器代理 / 自定义 Base URL 模式下使用本站图片代理。
+  if (isBangumiImageUrl(originalUrl)) {
+    const primary = getPrimaryBangumiImageSource();
+    const backup = getBackupBangumiImageSource(primary);
+    if (backup && isBangumiImageFallbackActive()) {
+      return buildBangumiImageUrl(originalUrl, backup);
+    }
+    return buildBangumiImageUrl(originalUrl, primary);
+  }
+
+  // 处理豆瓣图片代理
+  if (!originalUrl.includes('doubanio.com')) {
+    return originalUrl;
+  }
+
+  const { proxyType, proxyUrl } = getDoubanImageProxyConfig();
+  return buildDoubanImageUrl(originalUrl, proxyType, proxyUrl);
 }
 
 /**
@@ -135,7 +477,10 @@ export function processVideoUrl(originalUrl: string): string {
     case 'custom':
       // 使用自定义代理
       if (proxyUrl) {
-        return originalUrl.replace(/https?:\/\/img\d\.doubanio\.com/g, proxyUrl);
+        return originalUrl.replace(
+          /https?:\/\/img\d\.doubanio\.com/g,
+          proxyUrl
+        );
       }
       return originalUrl;
 
@@ -155,7 +500,7 @@ export function processVideoUrl(originalUrl: string): string {
  */
 export async function getVideoResolutionFromM3u8(
   m3u8Url: string,
-  timeoutMs = 4000
+  timeoutMs = 6000
 ): Promise<{
   quality: string; // 如720p、1080p等
   loadSpeed: string; // 自动转换为KB/s或MB/s
@@ -163,6 +508,8 @@ export async function getVideoResolutionFromM3u8(
   bitrate: string; // 视频码率（如 "2.5 Mbps"）
 }> {
   try {
+    const { default: Hls } = await import('hls.js');
+
     // 直接使用m3u8 URL作为视频源，避免CORS问题
     return new Promise((resolve, reject) => {
       const video = document.createElement('video');
@@ -185,11 +532,56 @@ export async function getVideoResolutionFromM3u8(
       // 固定使用hls.js加载
       const hls = new Hls();
 
-      // 设置超时处理 - 使用传入的超时时间
-      const timeout = setTimeout(() => {
+      let actualLoadSpeed = '未知';
+      let hasSpeedCalculated = false;
+      let hasMetadataLoaded = false;
+      let estimatedBitrate = 0; // 估算的码率（bps）
+
+      // 提取核心返回逻辑供 resolve 和 timeout 共同调用
+      const resolveCurrentState = () => {
+        const width = video.videoWidth;
+        const quality =
+          width >= 3840
+            ? '4K'
+            : width >= 2560
+            ? '2K'
+            : width >= 1920
+            ? '1080p'
+            : width >= 1280
+            ? '720p'
+            : width >= 854
+            ? '480p'
+            : width > 0
+            ? 'SD'
+            : '未知';
+
+        const bitrateStr =
+          estimatedBitrate > 0
+            ? estimatedBitrate >= 1000000
+              ? `${(estimatedBitrate / 1000000).toFixed(1)} Mbps`
+              : `${Math.round(estimatedBitrate / 1000)} Kbps`
+            : '未知';
+
         hls.destroy();
         video.remove();
-        reject(new Error('Timeout loading video metadata'));
+
+        resolve({
+          quality,
+          loadSpeed: actualLoadSpeed,
+          pingTime: Math.round(pingTime),
+          bitrate: bitrateStr,
+        });
+      };
+
+      // 设置超时处理 - 如果部分数据已拿到，则宽容返回
+      const timeout = setTimeout(() => {
+        if (hasMetadataLoaded || hasSpeedCalculated) {
+          resolveCurrentState();
+        } else {
+          hls.destroy();
+          video.remove();
+          reject(new Error('Timeout loading video metadata'));
+        }
       }, timeoutMs);
 
       video.onerror = () => {
@@ -199,67 +591,16 @@ export async function getVideoResolutionFromM3u8(
         reject(new Error('Failed to load video metadata'));
       };
 
-      let actualLoadSpeed = '未知';
-      let hasSpeedCalculated = false;
-      let hasMetadataLoaded = false;
-      let estimatedBitrate = 0; // 估算的码率（bps）
-
       let fragmentStartTime = 0;
 
-      // 检查是否可以返回结果
+      // 检查是否可以相互满足要求
       const checkAndResolve = () => {
         if (
           hasMetadataLoaded &&
           (hasSpeedCalculated || actualLoadSpeed !== '未知')
         ) {
           clearTimeout(timeout);
-          const width = video.videoWidth;
-          if (width && width > 0) {
-            hls.destroy();
-            video.remove();
-
-            // 根据视频宽度判断视频质量等级，使用经典分辨率的宽度作为分割点
-            const quality =
-              width >= 3840
-                ? '4K' // 4K: 3840x2160
-                : width >= 2560
-                  ? '2K' // 2K: 2560x1440
-                  : width >= 1920
-                    ? '1080p' // 1080p: 1920x1080
-                    : width >= 1280
-                      ? '720p' // 720p: 1280x720
-                      : width >= 854
-                        ? '480p'
-                        : 'SD'; // 480p: 854x480
-
-            // 格式化码率
-            const bitrateStr = estimatedBitrate > 0
-              ? estimatedBitrate >= 1000000
-                ? `${(estimatedBitrate / 1000000).toFixed(1)} Mbps`
-                : `${Math.round(estimatedBitrate / 1000)} Kbps`
-              : '未知';
-
-            resolve({
-              quality,
-              loadSpeed: actualLoadSpeed,
-              pingTime: Math.round(pingTime),
-              bitrate: bitrateStr,
-            });
-          } else {
-            // webkit 无法获取尺寸，直接返回
-            const bitrateStr = estimatedBitrate > 0
-              ? estimatedBitrate >= 1000000
-                ? `${(estimatedBitrate / 1000000).toFixed(1)} Mbps`
-                : `${Math.round(estimatedBitrate / 1000)} Kbps`
-              : '未知';
-
-            resolve({
-              quality: '未知',
-              loadSpeed: actualLoadSpeed,
-              pingTime: Math.round(pingTime),
-              bitrate: bitrateStr,
-            });
-          }
+          resolveCurrentState();
         }
       };
 
@@ -298,9 +639,17 @@ export async function getVideoResolutionFromM3u8(
               const fragmentSize = size; // 分片大小（字节）
 
               // 码率 = (分片大小 × 8 bits) / 分片时长
-              estimatedBitrate = Math.round((fragmentSize * 8) / fragmentDuration);
+              estimatedBitrate = Math.round(
+                (fragmentSize * 8) / fragmentDuration
+              );
 
-              console.log(`[测速] 估算码率: ${(estimatedBitrate / 1000000).toFixed(2)} Mbps (分片: ${(fragmentSize / 1024 / 1024).toFixed(2)} MB, 时长: ${fragmentDuration.toFixed(1)}s)`);
+              console.log(
+                `[测速] 估算码率: ${(estimatedBitrate / 1000000).toFixed(
+                  2
+                )} Mbps (分片: ${(fragmentSize / 1024 / 1024).toFixed(
+                  2
+                )} MB, 时长: ${fragmentDuration.toFixed(1)}s)`
+              );
             }
 
             checkAndResolve(); // 尝试返回结果
@@ -309,7 +658,7 @@ export async function getVideoResolutionFromM3u8(
       });
 
       // 为分片请求添加时间戳参数破除浏览器缓存
-      hls.config.xhrSetup = function(xhr: XMLHttpRequest, url: string) {
+      hls.config.xhrSetup = function (xhr: XMLHttpRequest, url: string) {
         const urlWithTimestamp = url.includes('?')
           ? `${url}&_t=${Date.now()}`
           : `${url}?_t=${Date.now()}`;
@@ -323,6 +672,28 @@ export async function getVideoResolutionFromM3u8(
       hls.on(Hls.Events.ERROR, (event: any, data: any) => {
         console.error('HLS错误:', data);
         if (data.fatal) {
+          const statusCode = data.response?.code || data.response?.status;
+          // 防止 415 代理兜底熔断导致正常的二进制源在优选逻辑中被剔除
+          if (
+            statusCode === 415 &&
+            (m3u8Url.includes('/api/proxy-m3u8') ||
+              m3u8Url.includes('/api/proxy/vod/m3u8'))
+          ) {
+            console.log(
+              '[测速] 测速通道嗅探到这是底层的媒体流文件，免测速通过'
+            );
+            clearTimeout(timeout);
+            hls.destroy();
+            video.remove();
+            resolve({
+              quality: '原生画质',
+              loadSpeed: '直连',
+              pingTime: 10,
+              bitrate: '未知',
+            });
+            return;
+          }
+
           clearTimeout(timeout);
           hls.destroy();
           video.remove();
@@ -338,7 +709,8 @@ export async function getVideoResolutionFromM3u8(
     });
   } catch (error) {
     throw new Error(
-      `Error getting video resolution: ${error instanceof Error ? error.message : String(error)
+      `Error getting video resolution: ${
+        error instanceof Error ? error.message : String(error)
       }`
     );
   }

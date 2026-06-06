@@ -27,11 +27,13 @@
 - ✨ **视频超分 (Anime4K)**：使用 WebGPU 技术实现实时视频画质增强（支持 1.5x/2x/3x/4x 超分）
 - 💬 **弹幕系统**：完整的弹幕搜索、匹配、加载功能，支持弹幕设置持久化、弹幕屏蔽
 - 📝 **豆瓣评论抓取**：自动抓取并展示豆瓣电影短评，支持分页加载
+- 🧩 **视频源脚本**：支持通过脚本自定义视频源、搜索、详情与播放解析逻辑（实验性）
 - 🪒**自定义去广告**：你可以自定义你的去广告代码，实现更强力的去广告功能
+- 🚀 **更快更顺滑**：相较原版项目整体速度更快，交互体验更好
 - 🎭 **观影室**：支持多人同步观影、实时聊天、语音通话等功能（实验性）。
-- 📥 **M3U8完整下载**：通过合并m3u8片段实现完整视频下载。
+- 📥 **M3U8完整下载**：支持浏览器内合并 m3u8 片段下载，也支持下载到本地文件夹并无感播放本地视频。
 - 💾 **服务器离线下载**：支持在服务器端下载视频文件，支持断点续传，提前下载到家秒加载 。
-- 📚 **私人影库**：接入 OpenList或Emby，可打造专属私人影库，亦可观看网盘资源。
+- 📚 **私人影库**：接入 OpenList、Emby 或小雅，可打造专属私人影库，亦可观看网盘资源。
 
 ## ✨ 功能特性
 
@@ -86,13 +88,19 @@
 
 ## 部署
 
-本项目**支持 Docker、Vercel 和 Cloudflare Workers 平台** 部署。
+本项目**支持 Docker、Vercel、Netlify 和 Cloudflare Workers 平台** 部署。
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/mtvpls/MoonTVPlus)
 
-**一键部署到zeabur**
+[![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/mtvpls/MoonTVPlus)
+
+**一键部署到 Zeabur**
 
 [![Deploy on Zeabur](https://zeabur.com/button.svg)](https://zeabur.com/templates/SCHCAY/deploy)
+
+**一键部署到 Render**
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/mtvpls/MoonTVPlus)
 
 
 
@@ -115,7 +123,7 @@ Cloudflare Workers 提供免费的边缘计算服务，通过 GitHub Actions 可
 - 点击 "Create Token"，选择 "Edit Cloudflare Workers" 模板
 - 或使用自定义 Token，需要以下权限：
   - Account - Cloudflare Workers Scripts - Edit
-  - Account - Cloudflare Workers KV Storage - Edit
+  - Account - D1 - Edit（仅在使用 D1 数据库时需要）
 - 创建后复制生成的 API Token
 - 在 Dashboard 首页右侧可以看到你的 Account ID
 
@@ -214,7 +222,7 @@ services:
     container_name: moontv-kvrocks
     restart: unless-stopped
     volumes:
-      - kvrocks-data:/var/lib/kvrocks/data
+      - kvrocks-data:/var/lib/kvrocks/db
     networks:
       - moontv-network
 networks:
@@ -223,6 +231,27 @@ networks:
 volumes:
   kvrocks-data:
 ```
+（若指定kvrocks-data目录，需要将所挂载的数据目录权限调整为777否则会导致创建数据库失败）
+
+### SQLite 存储
+
+```yml
+services:
+  moontv-core:
+    image: ghcr.io/mtvpls/moontvplus:latest
+    container_name: moontv-core
+    restart: on-failure
+    ports:
+      - '3000:3000'
+    environment:
+      - USERNAME=admin
+      - PASSWORD=admin_password
+      - NEXT_PUBLIC_STORAGE_TYPE=d1
+      - SQLITE_DB_PATH=/app/.data/moontv.db
+    volumes:
+      - ./data:/app/.data
+```
+
 
 ### Redis 存储（有一定的丢数据风险）
 
@@ -279,6 +308,44 @@ services:
       - UPSTASH_TOKEN=上面的 TOKEN
 ```
 
+#### Lite 镜像说明
+
+`ghcr.io/mtvpls/moontvplus-lite:latest` 为更小的镜像，但不支持启动内置观影室服务，也不支持 SQLite（`NEXT_PUBLIC_STORAGE_TYPE=d1`）自动初始化方案。
+
+示例：
+
+```yml
+services:
+  moontv-core:
+    image: ghcr.io/mtvpls/moontvplus-lite:latest
+    container_name: moontv-core
+    restart: on-failure
+    ports:
+      - '3000:3000'
+    environment:
+      - USERNAME=admin
+      - PASSWORD=admin_password
+      - NEXT_PUBLIC_STORAGE_TYPE=kvrocks
+      - KVROCKS_URL=redis://moontv-kvrocks:6666
+    networks:
+      - moontv-network
+    depends_on:
+      - moontv-kvrocks
+  moontv-kvrocks:
+    image: apache/kvrocks
+    container_name: moontv-kvrocks
+    restart: unless-stopped
+    volumes:
+      - kvrocks-data:/var/lib/kvrocks/db
+    networks:
+      - moontv-network
+networks:
+  moontv-network:
+    driver: bridge
+volumes:
+  kvrocks-data:
+```
+（若指定kvrocks-data目录，需要将所挂载的数据目录权限调整为777否则会导致创建数据库失败）
 ## 配置文件
 
 完成部署后为空壳应用，无播放源，需要站长在管理后台的配置文件设置中填写配置文件，本版本已不支持无数据库运行。
@@ -339,6 +406,8 @@ dockge/komodo 等 docker compose UI 也有自动更新功能
 | USERNAME                                 | 站长账号                                                     | 任意字符串                  | 无默认，必填字段                                             |
 | PASSWORD                                 | 站长密码                                                     | 任意字符串                  | 无默认，必填字段                                             |
 | CRON_PASSWORD                            | 定时任务 API 访问密码（用于保护 /api/cron 端点）             | 任意字符串                  | mtvpls                                                       |
+| CRON_WAIT_FOR_COMPLETION                 | 定时任务接口是否等待任务完全结束后再返回响应（true 时返回 200，false 时立即返回 202）。部署在 serverless 平台（如 Vercel）时建议设置为 true，否则响应返回后异步执行可能会被平台杀后台导致任务中断 | true/false                  | false                                                        |
+| CRON_USER_BATCH_SIZE                     | 定时任务用户批处理大小（控制并发处理的用户数量，影响播放记录和收藏更新任务的并发性能） | 正整数                      | 3                                                            |
 | SITE_BASE                                | 站点 url                                                     | 形如 https://example.com    | 空                                                           |
 | NEXT_PUBLIC_SITE_NAME                    | 站点名称                                                     | 任意字符串                  | MoonTV                                                       |
 | ANNOUNCEMENT                             | 站点公告                                                     | 任意字符串                  | 本网站仅提供影视信息搜索服务，所有内容均来自第三方网站。本站不存储任何视频资源，不对任何内容的准确性、合法性、完整性负责。 |
@@ -356,6 +425,7 @@ dockge/komodo 等 docker compose UI 也有自动更新功能
 | NEXT_PUBLIC_FLUID_SEARCH                 | 是否开启搜索接口流式输出                                     | true/ false                 | true                                                         |
 | NEXT_PUBLIC_PROXY_M3U8_TOKEN             | M3U8 代理 API 鉴权 Token（外部播放器跳转时的鉴权token，不填为无鉴权） | 任意字符串                  | (空)                                                         |
 | NEXT_PUBLIC_DANMAKU_CACHE_EXPIRE_MINUTES | 弹幕缓存失效时间（分钟数，设为 0 时不缓存）                  | 0 或正整数                  | 4320（3天）                                                  |
+| ENABLE_TV_MODE                           | 是否启用 TV 模式；设为 false 后 /tv 不可访问，且不启动电视遥控 Socket.IO 监听 | true/false                  | true                                                         |
 | ENABLE_TVBOX_SUBSCRIBE                   | 是否启用 TVBOX 订阅功能                                      | true/false                  | false                                                        |
 | TVBOX_SUBSCRIBE_TOKEN                    | TVBOX 订阅 API 访问 Token，如启用TVBOX功能必须设置该项       | 任意字符串                  | (空)                                                         |
 | TVBOX_BLOCKED_SOURCES                    | TVBOX 订阅屏蔽源列表（多个源用逗号分隔，匹配视频源的 key）   | 逗号分隔的源 key            | (空)                                                         |
@@ -369,6 +439,7 @@ dockge/komodo 等 docker compose UI 也有自动更新功能
 | VIDEOINFO_CACHE_MINUTES                  | 私人影库视频信息在内存中的缓存时长（分钟）                   | 正整数                      | 1440（1天）                                                  |
 | NEXT_PUBLIC_ENABLE_SOURCE_SEARCH         | 是否开启源站寻片功能                                         | true/false                  | true                                                         |
 | MAX_PLAY_RECORDS_PER_USER                | 单个用户播放记录清理阈值（超过此数量将自动清理旧记录）       | 正整数                      | 100                                                          |
+| MAX_MANGA_HISTORY_PER_USER              | 单个用户漫画阅读历史保留上限 | 正整数                      | 100                                                          |
 | INIT_CONFIG                              | 初始配置（JSON 格式，包含 api_site、custom_category、lives 等） | JSON 字符串                 | (空)                                                         |
 | CONFIG_SUBSCRIPTION_URL                  | 配置订阅 URL（Base58 编码的配置文件地址，优先级高于 INIT_CONFIG） | URL                         | (空)                                                         |
 | TMDB_API_KEY                             | TMDB API 密钥                                                | 任意字符串                  | (空)                                                         |
@@ -376,6 +447,8 @@ dockge/komodo 等 docker compose UI 也有自动更新功能
 | TMDB_REVERSE_PROXY                       | TMDB 反向代理地址                                            | URL                         | (空)                                                         |
 | DANMAKU_API_BASE                         | 弹幕 API 地址                                                | URL                         | http://localhost:9321                                        |
 | DANMAKU_API_TOKEN                        | 弹幕 API Token                                               | 任意字符串                  | 87654321                                                     |
+| DATA_MIGRATION_CHUNK_SIZE                | 数据迁移批处理大小（控制导入导出时每批处理的用户数量和数据条数） | 正整数                      | 10                                                           |
+| QR_LOGIN_STORE_MODE                      | 电视端扫码登录状态存储模式；serverless环境下多节点内存状态不可靠。 | auto、memory、hybrid、shared | auto                                                         |
 
 NEXT_PUBLIC_DOUBAN_PROXY_TYPE 选项解释：
 
